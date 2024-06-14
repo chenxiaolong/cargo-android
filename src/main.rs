@@ -5,7 +5,6 @@ use std::{
     collections::HashMap,
     env,
     ffi::OsString,
-    os::unix::process::ExitStatusExt,
     path::PathBuf,
     process::{self, Command, ExitStatus},
 };
@@ -137,17 +136,26 @@ fn main_wrapper() -> Result<ExitStatus, String> {
     Ok(status)
 }
 
+fn get_exit_code(status: ExitStatus) -> i32 {
+    if let Some(code) = status.code() {
+        return code;
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    {
+        use std::os::unix::process::ExitStatusExt;
+
+        if let Some(signal) = status.signal() {
+            return 128 + signal;
+        }
+    }
+
+    255
+}
+
 fn main() {
     let code = match main_wrapper() {
-        Ok(status) => {
-            if let Some(code) = status.code() {
-                code
-            } else if let Some(signal) = status.signal() {
-                128 + signal
-            } else {
-                255
-            }
-        }
+        Ok(status) => get_exit_code(status),
         Err(e) => {
             eprintln!("{e}");
             255
