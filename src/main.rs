@@ -91,6 +91,58 @@ fn get_android_env(target: &str) -> Result<HashMap<String, OsString>, String> {
         clang.into_os_string(),
     );
 
+    // Work around https://github.com/rust-lang/rust/issues/109717.
+    if target == "x86_64-linux-android" {
+        let mut clang_dir = toolchain_dir.clone();
+        clang_dir.push("lib");
+        clang_dir.push("clang");
+
+        let clang_version = clang_dir
+            .read_dir()
+            .and_then(|mut d| d.next().transpose())
+            .map_err(|e| format!("Failed to list directory: {clang_dir:?}: {e}"))?
+            .ok_or_else(|| format!("Missing clang version: {clang_dir:?}"))?
+            .file_name();
+
+        let mut clang_rt_dir = clang_dir.clone();
+        clang_rt_dir.push(clang_version);
+        clang_rt_dir.push("lib");
+        clang_rt_dir.push("linux");
+
+        let clang_rt_dir = clang_rt_dir
+            .into_os_string()
+            .into_string()
+            .map_err(|p| format!("Invalid UTF-8: {p:?}"))?;
+
+        let mut rustflags = vec![];
+
+        // Global flags completely override CARGO_TARGET_<target>_RUSTFLAGS, so
+        // we have to append to the global flags instead of using target flags.
+        // Cargo only supports UTF-8 for these variables, so we don't worry
+        // about OsString here.
+        if let Ok(flags) = env::var("CARGO_ENCODED_RUSTFLAGS") {
+            rustflags.extend(flags.split('\x1f').map(str::to_string));
+        } else if let Ok(flags) = env::var("RUSTFLAGS") {
+            rustflags.extend(
+                flags
+                    .split(' ')
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty())
+                    .map(str::to_string),
+            );
+        }
+
+        rustflags.push("-L".into());
+        rustflags.push(clang_rt_dir);
+        rustflags.push("-l".into());
+        rustflags.push("static=clang_rt.builtins-x86_64-android".into());
+
+        vars.insert(
+            format!("CARGO_ENCODED_RUSTFLAGS"),
+            rustflags.join("\x1f").into(),
+        );
+    }
+
     Ok(vars)
 }
 
