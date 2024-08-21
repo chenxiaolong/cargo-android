@@ -78,9 +78,14 @@ fn get_android_env(target: &str) -> Result<HashMap<String, OsString>, String> {
     clang.push("bin");
     clang.push(format!("{ndk_target}{api}-clang{CLANG_SUFFIX}"));
 
+    let mut clangpp = toolchain_dir.clone();
+    clangpp.push("bin");
+    clangpp.push(format!("{ndk_target}{api}-clang++{CLANG_SUFFIX}"));
+
     let mut vars = HashMap::new();
     vars.insert(format!("AR_{target}"), ar.into_os_string());
     vars.insert(format!("CC_{target}"), clang.as_os_str().to_owned());
+    vars.insert(format!("CXX_{target}"), clang.as_os_str().to_owned());
     vars.insert(format!("BINDGEN_EXTRA_CLANG_ARGS_{target}"), {
         let mut v = OsString::from("--sysroot=");
         v.push(sysroot_dir);
