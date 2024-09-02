@@ -6,7 +6,7 @@ use std::{
     env,
     ffi::OsString,
     path::PathBuf,
-    process::{self, Command, ExitStatus},
+    process::{Command, ExitCode, ExitStatus},
 };
 
 #[cfg(target_os = "linux")]
@@ -193,9 +193,9 @@ fn main_wrapper() -> Result<ExitStatus, String> {
     Ok(status)
 }
 
-fn get_exit_code(status: ExitStatus) -> i32 {
+fn get_exit_code(status: ExitStatus) -> u8 {
     if let Some(code) = status.code() {
-        return code;
+        return code as u8;
     }
 
     #[cfg(not(target_os = "windows"))]
@@ -203,14 +203,14 @@ fn get_exit_code(status: ExitStatus) -> i32 {
         use std::os::unix::process::ExitStatusExt;
 
         if let Some(signal) = status.signal() {
-            return 128 + signal;
+            return 128 + signal as u8;
         }
     }
 
     255
 }
 
-fn main() {
+fn main() -> ExitCode {
     let code = match main_wrapper() {
         Ok(status) => get_exit_code(status),
         Err(e) => {
@@ -219,5 +219,5 @@ fn main() {
         }
     };
 
-    process::exit(code);
+    ExitCode::from(code)
 }
