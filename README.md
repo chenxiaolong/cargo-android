@@ -40,4 +40,4 @@ Bug fixes are welcome! However, I'm unlikely to accept changes for supporting ad
 
 ## License
 
-cargo-android is licensed under GPLv3. Please see [`LICENSE`](./LICENSE) for the full license text.
+cargo-android is licensed under GPL-3.0-only. Please see [`LICENSE`](./LICENSE) for the full license text.
