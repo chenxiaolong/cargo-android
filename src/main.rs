@@ -202,10 +202,10 @@ fn main_wrapper() -> Result<ExitStatus, String> {
     let mut command = Command::new(cargo);
     command.args(env::args_os().skip(2));
 
-    if let Some(t) = &target {
-        if t.contains("android") {
-            command.envs(get_android_env(t)?);
-        }
+    if let Some(t) = &target
+        && t.contains("android")
+    {
+        command.envs(get_android_env(t)?);
     }
 
     let mut child = command.spawn().map_err(|e| format!("{command:?}: {e}"))?;
