@@ -1,10 +1,10 @@
-// SPDX-FileCopyrightText: 2024 Andrew Gunnerson
+// SPDX-FileCopyrightText: 2024-2026 Andrew Gunnerson
 // SPDX-License-Identifier: GPL-3.0-only
 
 use std::{
     collections::HashMap,
     env,
-    ffi::OsString,
+    ffi::{OsStr, OsString},
     path::PathBuf,
     process::{Command, ExitCode, ExitStatus},
 };
@@ -25,6 +25,26 @@ const CLANG_SUFFIX: &str = ".cmd";
 const EXE_SUFFIX: &str = "";
 #[cfg(target_os = "windows")]
 const EXE_SUFFIX: &str = ".exe";
+
+#[cfg(not(target_os = "windows"))]
+fn maybe_escape_backslashes(path: &OsStr) -> OsString {
+    path.to_owned()
+}
+#[cfg(target_os = "windows")]
+fn maybe_escape_backslashes(path: &OsStr) -> OsString {
+    use std::os::windows::ffi::{OsStrExt, OsStringExt};
+
+    let mut escaped = vec![];
+
+    for code_point in path.encode_wide() {
+        if u32::from(code_point) == '\\' as u32 {
+            escaped.push(code_point);
+        }
+        escaped.push(code_point);
+    }
+
+    OsString::from_wide(&escaped)
+}
 
 fn get_android_env(target: &str) -> Result<HashMap<String, OsString>, String> {
     let ndk_dir = env::var_os("ANDROID_NDK_ROOT")
@@ -88,7 +108,8 @@ fn get_android_env(target: &str) -> Result<HashMap<String, OsString>, String> {
     vars.insert(format!("CXX_{target}"), clang.as_os_str().to_owned());
     vars.insert(format!("BINDGEN_EXTRA_CLANG_ARGS_{target}"), {
         let mut v = OsString::from("--sysroot=");
-        v.push(sysroot_dir);
+        // The backslashes get interpreted as escape characters on Windows.
+        v.push(maybe_escape_backslashes(sysroot_dir.as_os_str()));
         v
     });
     vars.insert(
@@ -143,7 +164,7 @@ fn get_android_env(target: &str) -> Result<HashMap<String, OsString>, String> {
         rustflags.push("static=clang_rt.builtins-x86_64-android".into());
 
         vars.insert(
-            format!("CARGO_ENCODED_RUSTFLAGS"),
+            "CARGO_ENCODED_RUSTFLAGS".to_owned(),
             rustflags.join("\x1f").into(),
         );
     }
