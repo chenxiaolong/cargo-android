@@ -94,7 +94,7 @@ fn get_min_api(sysroot_dir: &Path, target: &str) -> Result<u8, String> {
     }
 }
 
-fn get_clang_rt(toolchain_dir: &Path, target: &str) -> Result<(PathBuf, String), String> {
+fn get_clang_rt(toolchain_dir: &Path, ndk_target: &str) -> Result<(PathBuf, String), String> {
     let mut clang_dir = toolchain_dir.to_owned();
     clang_dir.push("lib");
     clang_dir.push("clang");
@@ -111,13 +111,13 @@ fn get_clang_rt(toolchain_dir: &Path, target: &str) -> Result<(PathBuf, String),
     clang_rt_dir.push("lib");
     clang_rt_dir.push("linux");
 
-    let arch = target
+    let arch = ndk_target
         .split("-")
         .next()
-        .ok_or_else(|| format!("Failed to parse arch from target: {target:?}"))?;
+        .ok_or_else(|| format!("Failed to parse arch from NDK target: {ndk_target:?}"))?;
 
     let clang_rt_arch = match arch {
-        "armv7" => "arm",
+        "armv7a" => "arm",
         a => a,
     };
 
@@ -149,7 +149,7 @@ fn get_android_env(target: &str) -> Result<HashMap<String, OsString>, String> {
 
     let sysroot_dir = toolchain_dir.join("sysroot");
     let api = get_min_api(&sysroot_dir, target)?;
-    let (clang_rt_dir, clang_rt_lib) = get_clang_rt(&toolchain_dir, target)?;
+    let (clang_rt_dir, clang_rt_lib) = get_clang_rt(&toolchain_dir, ndk_target)?;
 
     let mut ar = toolchain_dir.clone();
     ar.push("bin");
