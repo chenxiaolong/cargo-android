@@ -27,21 +27,46 @@ const EXE_SUFFIX: &str = "";
 const EXE_SUFFIX: &str = ".exe";
 
 #[cfg(not(target_os = "windows"))]
-fn maybe_escape_backslashes(path: &OsStr) -> OsString {
-    path.to_owned()
+fn bindgen_escape_path(path: &OsStr) -> OsString {
+    use std::os::unix::ffi::{OsStrExt, OsStringExt};
+
+    let mut escaped = vec![];
+
+    escaped.push(b'\'');
+
+    for b in path.as_bytes() {
+        if *b == b'\'' {
+            escaped.extend("'\"'\"'".as_bytes());
+        } else {
+            escaped.push(*b);
+        }
+    }
+
+    escaped.push(b'\'');
+
+    OsString::from_vec(escaped)
 }
 #[cfg(target_os = "windows")]
-fn maybe_escape_backslashes(path: &OsStr) -> OsString {
+fn bindgen_escape_path(path: &OsStr) -> OsString {
     use std::os::windows::ffi::{OsStrExt, OsStringExt};
 
     let mut escaped = vec![];
 
+    escaped.push('\'' as u16);
+
     for code_point in path.encode_wide() {
-        if u32::from(code_point) == '\\' as u32 {
+        if code_point == '\'' as u16 {
+            escaped.extend("'\"'\"'".chars().map(|c| c as u16));
+        } else {
+            // The backslashes get interpreted as escape characters on Windows.
+            if code_point == '\\' as u16 {
+                escaped.push(code_point);
+            }
             escaped.push(code_point);
         }
-        escaped.push(code_point);
     }
+
+    escaped.push('\'' as u16);
 
     OsString::from_wide(&escaped)
 }
@@ -144,8 +169,7 @@ fn get_android_env(target: &str) -> Result<HashMap<String, OsString>, String> {
     vars.insert(format!("CXX_{target}"), clang.as_os_str().to_owned());
     vars.insert(format!("BINDGEN_EXTRA_CLANG_ARGS_{target}"), {
         let mut v = OsString::from("--sysroot=");
-        // The backslashes get interpreted as escape characters on Windows.
-        v.push(maybe_escape_backslashes(sysroot_dir.as_os_str()));
+        v.push(bindgen_escape_path(sysroot_dir.as_os_str()));
 
         // Passing the minimum API level via --target doesn't actually work
         // because the libclang that bindgen uses doesn't set the macro to the
