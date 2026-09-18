@@ -5,7 +5,7 @@ use std::{
     collections::HashMap,
     env,
     ffi::{OsStr, OsString},
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::{Command, ExitCode, ExitStatus},
 };
 
@@ -46,6 +46,61 @@ fn maybe_escape_backslashes(path: &OsStr) -> OsString {
     OsString::from_wide(&escaped)
 }
 
+fn get_min_api(sysroot_dir: &Path, target: &str) -> Result<u8, String> {
+    if let Some(v) = env::var_os("ANDROID_API") {
+        v.to_str()
+            .and_then(|s| s.parse::<u8>().ok())
+            .ok_or_else(|| format!("Invalid ANDROID_API: {v:?}"))
+    } else {
+        let mut lib_dir = sysroot_dir.to_owned();
+        lib_dir.push("usr");
+        lib_dir.push("lib");
+        lib_dir.push(target);
+
+        lib_dir
+            .read_dir()
+            .map_err(|e| format!("{lib_dir:?}: {e}"))?
+            .filter_map(|r| {
+                r.ok()
+                    .and_then(|e| e.file_name().to_str().and_then(|n| n.parse::<u8>().ok()))
+            })
+            .max()
+            .ok_or_else(|| format!("Failed to get API list from: {lib_dir:?}"))
+    }
+}
+
+fn get_clang_rt(toolchain_dir: &Path, target: &str) -> Result<(PathBuf, String), String> {
+    let mut clang_dir = toolchain_dir.to_owned();
+    clang_dir.push("lib");
+    clang_dir.push("clang");
+
+    let clang_version = clang_dir
+        .read_dir()
+        .and_then(|mut d| d.next().transpose())
+        .map_err(|e| format!("Failed to list directory: {clang_dir:?}: {e}"))?
+        .ok_or_else(|| format!("Missing clang version: {clang_dir:?}"))?
+        .file_name();
+
+    let mut clang_rt_dir = clang_dir.to_owned();
+    clang_rt_dir.push(clang_version);
+    clang_rt_dir.push("lib");
+    clang_rt_dir.push("linux");
+
+    let arch = target
+        .split("-")
+        .next()
+        .ok_or_else(|| format!("Failed to parse arch from target: {target:?}"))?;
+
+    let clang_rt_arch = match arch {
+        "armv7" => "arm",
+        a => a,
+    };
+
+    let clang_rt_lib = format!("clang_rt.builtins-{clang_rt_arch}-android");
+
+    Ok((clang_rt_dir, clang_rt_lib))
+}
+
 fn get_android_env(target: &str) -> Result<HashMap<String, OsString>, String> {
     let ndk_dir = env::var_os("ANDROID_NDK_ROOT")
         .map(PathBuf::from)
@@ -68,27 +123,8 @@ fn get_android_env(target: &str) -> Result<HashMap<String, OsString>, String> {
     }
 
     let sysroot_dir = toolchain_dir.join("sysroot");
-
-    let api = if let Some(v) = env::var_os("ANDROID_API") {
-        v.to_str()
-            .and_then(|s| s.parse::<u8>().ok())
-            .ok_or_else(|| format!("Invalid ANDROID_API: {v:?}"))?
-    } else {
-        let mut lib_dir = sysroot_dir.clone();
-        lib_dir.push("usr");
-        lib_dir.push("lib");
-        lib_dir.push(target);
-
-        lib_dir
-            .read_dir()
-            .map_err(|e| format!("{lib_dir:?}: {e}"))?
-            .filter_map(|r| {
-                r.ok()
-                    .and_then(|e| e.file_name().to_str().and_then(|n| n.parse::<u8>().ok()))
-            })
-            .max()
-            .ok_or_else(|| format!("Failed to get API list from: {lib_dir:?}"))?
-    };
+    let api = get_min_api(&sysroot_dir, target)?;
+    let (clang_rt_dir, clang_rt_lib) = get_clang_rt(&toolchain_dir, target)?;
 
     let mut ar = toolchain_dir.clone();
     ar.push("bin");
@@ -110,6 +146,13 @@ fn get_android_env(target: &str) -> Result<HashMap<String, OsString>, String> {
         let mut v = OsString::from("--sysroot=");
         // The backslashes get interpreted as escape characters on Windows.
         v.push(maybe_escape_backslashes(sysroot_dir.as_os_str()));
+
+        // Passing the minimum API level via --target doesn't actually work
+        // because the libclang that bindgen uses doesn't set the macro to the
+        // correct value.
+        v.push(" -D__ANDROID_MIN_SDK_VERSION__=");
+        v.push(api.to_string());
+
         v
     });
     vars.insert(
@@ -118,56 +161,38 @@ fn get_android_env(target: &str) -> Result<HashMap<String, OsString>, String> {
     );
 
     // Work around https://github.com/rust-lang/rust/issues/109717.
-    if target == "x86_64-linux-android" {
-        let mut clang_dir = toolchain_dir.clone();
-        clang_dir.push("lib");
-        clang_dir.push("clang");
+    let clang_rt_dir = clang_rt_dir
+        .into_os_string()
+        .into_string()
+        .map_err(|p| format!("Invalid UTF-8: {p:?}"))?;
 
-        let clang_version = clang_dir
-            .read_dir()
-            .and_then(|mut d| d.next().transpose())
-            .map_err(|e| format!("Failed to list directory: {clang_dir:?}: {e}"))?
-            .ok_or_else(|| format!("Missing clang version: {clang_dir:?}"))?
-            .file_name();
+    let mut rustflags = vec![];
 
-        let mut clang_rt_dir = clang_dir.clone();
-        clang_rt_dir.push(clang_version);
-        clang_rt_dir.push("lib");
-        clang_rt_dir.push("linux");
-
-        let clang_rt_dir = clang_rt_dir
-            .into_os_string()
-            .into_string()
-            .map_err(|p| format!("Invalid UTF-8: {p:?}"))?;
-
-        let mut rustflags = vec![];
-
-        // Global flags completely override CARGO_TARGET_<target>_RUSTFLAGS, so
-        // we have to append to the global flags instead of using target flags.
-        // Cargo only supports UTF-8 for these variables, so we don't worry
-        // about OsString here.
-        if let Ok(flags) = env::var("CARGO_ENCODED_RUSTFLAGS") {
-            rustflags.extend(flags.split('\x1f').map(str::to_string));
-        } else if let Ok(flags) = env::var("RUSTFLAGS") {
-            rustflags.extend(
-                flags
-                    .split(' ')
-                    .map(str::trim)
-                    .filter(|s| !s.is_empty())
-                    .map(str::to_string),
-            );
-        }
-
-        rustflags.push("-L".into());
-        rustflags.push(clang_rt_dir);
-        rustflags.push("-l".into());
-        rustflags.push("static=clang_rt.builtins-x86_64-android".into());
-
-        vars.insert(
-            "CARGO_ENCODED_RUSTFLAGS".to_owned(),
-            rustflags.join("\x1f").into(),
+    // Global flags completely override CARGO_TARGET_<target>_RUSTFLAGS, so we
+    // have to append to the global flags instead of using target flags. Cargo
+    // only supports UTF-8 for these variables, so we don't worry about OsString
+    // here.
+    if let Ok(flags) = env::var("CARGO_ENCODED_RUSTFLAGS") {
+        rustflags.extend(flags.split('\x1f').map(str::to_string));
+    } else if let Ok(flags) = env::var("RUSTFLAGS") {
+        rustflags.extend(
+            flags
+                .split(' ')
+                .map(str::trim)
+                .filter(|s| !s.is_empty())
+                .map(str::to_string),
         );
     }
+
+    rustflags.push("-L".into());
+    rustflags.push(clang_rt_dir);
+    rustflags.push("-l".into());
+    rustflags.push(format!("static={clang_rt_lib}"));
+
+    vars.insert(
+        "CARGO_ENCODED_RUSTFLAGS".to_owned(),
+        rustflags.join("\x1f").into(),
+    );
 
     Ok(vars)
 }
