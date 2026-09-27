@@ -36,6 +36,8 @@ cargo-android is a bare-bones, no dependency wrapper around `cargo` that sets up
 
 ## Contributing
 
+([AI policy](https://github.com/chenxiaolong/chenxiaolong/blob/master/AI_POLICY.md))
+
 Bug fixes are welcome! However, I'm unlikely to accept changes for supporting additional features or configuration that I don't need for my personal projects.
 
 ## License
